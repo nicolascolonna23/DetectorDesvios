@@ -24,9 +24,9 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: rgba(10, 10, 10, 0.98); }
     .stMetric {
         background-color: rgba(255, 255, 255, 0.05);
-        padding: 10px;
-        border-radius: 5px;
-        border-left: 4px solid #1565c0;
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 5px solid #1565c0;
     }
     h1, h2, h3, h4, span, p { color: white !important; }
     </style>
@@ -56,7 +56,7 @@ def get_data():
 
     df = pd.merge(df_tel, df_con, on="DOMINIO", suffixes=('_tel', '_con'))
     
-    # Filtro Dinámico de Fecha (basado en tu captura: Dic 2025 a Feb 2026)
+    # Rango de fechas: Diciembre 2025 a Febrero 2026
     if not df.empty and 'FECHA_DT_tel' in df.columns:
         df = df[(df['FECHA_DT_tel'] >= '2025-12-01') & (df['FECHA_DT_tel'] <= '2026-02-28')].copy()
 
@@ -68,7 +68,7 @@ except Exception as e:
     st.error(f"❌ Error crítico: {e}")
     st.stop()
 
-# 3. SIDEBAR - FILTROS
+# 3. SIDEBAR - NAVEGACIÓN Y FILTROS
 with st.sidebar:
     st.image("logo_diemar4.png", use_container_width=True)
     st.divider()
@@ -76,9 +76,8 @@ with st.sidebar:
     
     st.divider()
     if not df_full.empty:
-        # Selector de Dominio múltiple
         patentes = sorted(df_full["DOMINIO"].unique().tolist())
-        sel_patentes = st.multiselect("🚚 Patentes", patentes, default=patentes[:3])
+        sel_patentes = st.multiselect("🚚 Patentes", patentes)
         
         marcas = ["Todas"] + sorted(df_full["MARCA"].dropna().unique().tolist())
         marca_sel = st.selectbox("🏭 Marca", marcas)
@@ -93,66 +92,73 @@ if marca_sel != "Todas":
 if df.empty:
     st.warning("⚠️ Sin datos para los filtros seleccionados.")
 else:
-    if portal == "⛽ Combustible":
-        st.title("⛽ Análisis de Combustible — Power BI Style")
+    # --- PESTAÑA 1: DESEMPEÑO ---
+    if portal == "📊 Desempeño":
+        st.title("🚛 Fleet Analytics - Desempeño General")
         
-        # FILA 1: MÉTRICAS Y VELOCÍMETRO
-        col_gauge, col_metrics = st.columns([1, 1.2])
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Km Totales", f"{df['DISTANCIA RECORRIDA TELEMETRIA'].sum():,.0f}")
+        c2.metric("L/100km Promedio", f"{df['Consumo c/ 100km TELEMETRIA'].mean():.2f}")
+        c3.metric("Litros Totales", f"{df['LITROS CONSUMIDOS'].sum():,.0f}")
+
+        st.subheader("📍 Dispersión: Consumo vs Distancia")
+        df_plot = df.copy()
+        df_plot['size_burbuja'] = df_plot['Ralenti (Lts)'].fillna(0).clip(lower=0) + 5
+        fig = px.scatter(df_plot, x="DISTANCIA RECORRIDA TELEMETRIA", y="LITROS CONSUMIDOS", 
+                         color="DOMINIO", size="size_burbuja", hover_name="DOMINIO",
+                         template="plotly_dark")
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- PESTAÑA 2: COMBUSTIBLE ---
+    elif portal == "⛽ Combustible":
+        st.title("⛽ Control de Combustible")
         
-        with col_gauge:
-            prom_l100 = df['Consumo c/ 100km TELEMETRIA'].mean()
-            fig_gauge = go.Figure(go.Indicator(
-                mode = "gauge+number",
-                value = prom_l100,
-                domain = {'x': [0, 1], 'y': [0, 1]},
-                title = {'text': "Promedio L/100km", 'font': {'size': 20}},
-                gauge = {
-                    'axis': {'range': [None, 70], 'tickwidth': 1},
-                    'bar': {'color': "#1565c0"},
-                    'steps': [
-                        {'range': [0, 32], 'color': "green"},
-                        {'range': [32, 40], 'color': "yellow"},
-                        {'range': [40, 70], 'color': "red"}]}))
-            fig_gauge.update_layout(paper_bgcolor='rgba(0,0,0,0)', font={'color': "white"}, height=300)
-            st.plotly_chart(fig_gauge, use_container_width=True)
+        m1, m2, m3 = st.columns(3)
+        lts_tot = df['LITROS CONSUMIDOS'].sum()
+        ral_tot = df['Ralenti (Lts)'].sum()
+        m1.metric("Consumo Total (Lts)", f"{lts_tot:,.0f}")
+        m2.metric("Ralentí Total (Lts)", f"{ral_tot:,.0f}")
+        m3.metric("Kms Promedio/Mes", f"{(df['DISTANCIA RECORRIDA TELEMETRIA'].sum()/3000):.1f} mil")
 
-        with col_metrics:
-            m1, m2 = st.columns(2)
-            kms_mes = df['DISTANCIA RECORRIDA TELEMETRIA'].sum() / 3 # Promedio 3 meses
-            lts_mes = df['LITROS CONSUMIDOS'].sum() / 3
-            m1.metric("PROMEDIO KMS/MES", f"{(kms_mes/1000):.2f} mil")
-            m2.metric("PROMEDIO LTS/MES", f"{(lts_mes/1000):.2f} mil")
-            
-            # Gráfico de Línea: Evolución Consumo
-            df_line = df.groupby(df['FECHA_DT_tel'].dt.strftime('%Y-%m')).agg({'Consumo c/ 100km TELEMETRIA':'mean'}).reset_index()
-            fig_line = px.line(df_line, x='FECHA_DT_tel', y='Consumo c/ 100km TELEMETRIA', 
-                               title="Consumo por Año y Mes", markers=True, template="plotly_dark")
-            fig_line.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=200)
-            st.plotly_chart(fig_line, use_container_width=True)
-
-        # FILA 2: RANKING Y TREEMAP
         st.divider()
-        c_left, c_right = st.columns(2)
+        col_left, col_right = st.columns(2)
         
-        with c_left:
-            st.subheader("Suma de LITROS por DOMINIO")
+        with col_left:
+            st.subheader("Ranking Consumo por Unidad")
             fig_bar = px.bar(df.groupby('DOMINIO')['LITROS CONSUMIDOS'].sum().reset_index().sort_values('LITROS CONSUMIDOS'),
                              x='LITROS CONSUMIDOS', y='DOMINIO', orientation='h', 
                              color='LITROS CONSUMIDOS', color_continuous_scale='Blues', template="plotly_dark")
-            fig_bar.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
+            fig_bar.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig_bar, use_container_width=True)
 
-        with c_right:
-            st.subheader("Distribución de Consumo (Treemap)")
-            fig_tree = px.treemap(df, path=['MARCA', 'DOMINIO'], values='Consumo c/ 100km TELEMETRIA',
-                                  color='Consumo c/ 100km TELEMETRIA', color_continuous_scale='RdYlGn_r',
-                                  template="plotly_dark")
-            fig_tree.update_layout(paper_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig_tree, use_container_width=True)
+        with col_right:
+            st.subheader("Evolución L/100km")
+            df_line = df.groupby(df['FECHA_DT_tel'].dt.strftime('%Y-%m')).agg({'Consumo c/ 100km TELEMETRIA':'mean'}).reset_index()
+            fig_line = px.line(df_line, x='FECHA_DT_tel', y='Consumo c/ 100km TELEMETRIA', 
+                               markers=True, template="plotly_dark")
+            fig_line.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+            st.plotly_chart(fig_line, use_container_width=True)
 
-    else:
-        st.info("Seleccioná la pestaña '⛽ Combustible' para ver el nuevo diseño.")
+    # --- PESTAÑA 3: EMISIONES ---
+    elif portal == "🌿 Emisiones":
+        st.title("🌿 Portal de Sustentabilidad")
+        
+        e1, e2, e3 = st.columns(3)
+        total_co2 = df['Emisiones (KG CO2)'].sum()
+        km_tot = df['DISTANCIA RECORRIDA TELEMETRIA'].sum()
+        e1.metric("CO2 Total (kg)", f"{total_co2:,.0f}")
+        e2.metric("Eficiencia (gCO2/km)", f"{(total_co2/km_tot*1000):.1f}" if km_tot > 0 else "0")
+        e3.metric("Camiones Analizados", len(df['DOMINIO'].unique()))
+
+        st.divider()
+        st.subheader("Huella de Carbono por Patente")
+        fig_co2 = px.bar(df.sort_values("Emisiones (KG CO2)", ascending=False),
+                         x="DOMINIO", y="Emisiones (KG CO2)", color="Emisiones (KG CO2)",
+                         template="plotly_dark", color_continuous_scale="Reds")
+        fig_co2.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig_co2, use_container_width=True)
 
 # 5. FOOTER
 st.divider()
-st.caption("Fleet Analytics Expreso Diemar | Estilo Reporte Gerencial")
+st.caption(f"Fleet Analytics Expreso Diemar | Datos procesados: {len(df)} registros.")
