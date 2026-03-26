@@ -16,6 +16,7 @@ st.markdown("""
                     url("https://raw.githubusercontent.com/nicolascolonna23/DetectorDesvios/main/IMG_3101.jpg"); 
         background-size: cover; background-attachment: fixed;
     }
+    [data-testid="stSidebar"] { background-color: rgba(10, 15, 10, 0.98); }
     .stMetric {
         background-color: rgba(255, 255, 255, 0.05);
         padding: 15px; border-radius: 10px; border-top: 4px solid #2e7d32;
@@ -24,11 +25,11 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 2. CARGA Y PROCESAMIENTO CON CRUCE TEMPORAL
+# 2. CARGA Y CRUCE POR MES/AÑO/PATENTE
 @st.cache_data(ttl=600)
 def get_data():
-    u1 = "https://expresodiemar-my.sharepoint.com/:x:/g/personal/nicolascolonna_expresodiemar_onmicrosoft_com/IQCCJG7r9T2JTb0eAdpQU1ggAcTn9ZELfjq58Xk9-eqj58o?download=1" # Telemetría (Varios meses)
-    u2 = "https://expresodiemar-my.sharepoint.com/:x:/g/personal/nicolascolonna_expresodiemar_onmicrosoft_com/IQAWlrsay0HVT622_ANLB-bWAfMlRi4IHHFMH6DJBzVW3BU?download=1" # Conducción (Solo Enero)
+    u1 = "https://expresodiemar-my.sharepoint.com/:x:/g/personal/nicolascolonna_expresodiemar_onmicrosoft_com/IQCCJG7r9T2JTb0eAdpQU1ggAcTn9ZELfjq58Xk9-eqj58o?download=1" # Telemetría
+    u2 = "https://expresodiemar-my.sharepoint.com/:x:/g/personal/nicolascolonna_expresodiemar_onmicrosoft_com/IQAWlrsay0HVT622_ANLB-bWAfMlRi4IHHFMH6DJBzVW3BU?download=1" # Conducción (CO2/Ralentí)
     headers = {'User-Agent': 'Mozilla/5.0'}
     
     def download(url):
@@ -38,92 +39,98 @@ def get_data():
     df_tel = download(u1)
     df_con = download(u2)
     
-    # Limpieza y Formato de Fechas en ambos Excels
     for d in [df_tel, df_con]:
         d.columns = d.columns.str.strip().str.replace('í', 'i').str.replace('á', 'a')
         if 'DOMINIO' in d.columns:
             d['DOMINIO'] = d['DOMINIO'].astype(str).str.replace(' ', '').str.upper()
         if 'FECHA' in d.columns:
             d['FECHA_DT'] = pd.to_datetime(d['FECHA'], errors='coerce')
-            # Creamos una columna 'KEY_TIEMPO' con formato '2026-01' para el cruce
-            d['KEY_TIEMPO'] = d['FECHA_DT'].dt.strftime('%Y-%m')
+            d['KEY_TIEMPO'] = d['FECHA_DT'].dt.strftime('%Y-%m') # Ejemplo: '2026-01'
 
-    # --- EL CRUCE CRÍTICO ---
-    # Cruzamos por DOMINIO Y por KEY_TIEMPO (Mes y Año)
-    # Esto asegura que si en Telemetría hay datos de Diciembre, no se mezclen con el CO2 de Enero.
+    # UNIÓN: Solo si coinciden Patente Y Mes/Año
     df = pd.merge(df_tel, df_con, on=["DOMINIO", "KEY_TIEMPO"], suffixes=('_tel', '_con'))
-    
     return df
 
 try:
-    df = get_data()
+    df_master = get_data()
 except Exception as e:
-    st.error(f"❌ Error en el cruce de datos: {e}"); st.stop()
+    st.error(f"❌ Error en el cruce: {e}"); st.stop()
 
 # 3. SIDEBAR
 with st.sidebar:
     st.image("logo_diemar4.png", use_container_width=True)
-    st.title("🌿 Carbon Control")
     st.divider()
-    
-    # Solo mostramos los meses donde el cruce fue exitoso (donde hay coincidencia)
-    meses_disponibles = sorted(df["KEY_TIEMPO"].unique().tolist())
-    mes_sel = st.selectbox("📅 Mes con Datos de CO2", meses_disponibles)
-    
-    marca_sel = st.selectbox("🏭 Marca", ["Todas"] + sorted(df["MARCA"].unique().tolist()))
+    meses_cruzados = sorted(df_master["KEY_TIEMPO"].unique().tolist())
+    mes_sel = st.selectbox("📅 Período de Análisis", meses_cruzados)
+    marcas = ["Todas"] + sorted(df_master["MARCA"].unique().tolist())
+    marca_sel = st.selectbox("🏭 Filtrar Marca", marcas)
 
-# Filtrar por selección
-df_view = df[df["KEY_TIEMPO"] == mes_sel]
+# Lógica de comparación
+df_actual = df_master[df_master["KEY_TIEMPO"] == mes_sel]
+# Intentamos buscar el mes anterior en los datos cruzados
+idx_actual = meses_cruzados.index(mes_sel)
+df_previo = df_master[df_master["KEY_TIEMPO"] == meses_cruzados[idx_actual-1]] if idx_actual > 0 else pd.DataFrame()
+
 if marca_sel != "Todas":
-    df_view = df_view[df_view["MARCA"] == marca_sel]
+    df_actual = df_actual[df_actual["MARCA"] == marca_sel]
+    df_previo = df_previo[df_previo["MARCA"] == marca_sel]
 
-# 4. DASHBOARD DE EMISIONES REALES
-st.title(f"🌿 Análisis de Emisiones — Período {mes_sel}")
-st.info("Nota: Este dashboard solo muestra datos cruzados donde coinciden Patente y Mes en ambos reportes.")
+# 4. DASHBOARD DE EMISIONES
+st.title(f"🌿 Centro de Sustentabilidad — {mes_sel}")
 
-if df_view.empty:
-    st.warning("No se encontraron coincidencias para los filtros seleccionados.")
+if df_actual.empty:
+    st.warning("Sin datos para este período.")
 else:
-    # --- MÉTRICAS ---
+    # --- MÉTRICAS PRINCIPALES ---
     c1, c2, c3, c4 = st.columns(4)
     
-    co2_total = df_view['Emisiones (KG CO2)'].sum()
-    km_totales = df_view['DISTANCIA RECORRIDA TELEMETRIA'].sum()
-    intensidad = (co2_total / km_totales * 1000) if km_totales > 0 else 0
-    lts_ralenti = df_view['Ralenti (Lts)'].sum()
-    ahorro_co2_ralenti = lts_ralenti * 2.68
+    # CO2 e Incremento/Descenso
+    co2_now = df_actual['Emisiones (KG CO2)'].sum()
+    co2_prev = df_previo['Emisiones (KG CO2)'].sum() if not df_previo.empty else 0
+    delta_co2 = ((co2_now - co2_prev) / co2_prev * 100) if co2_prev > 0 else 0
+    c1.metric("CO₂ EMITIDO (MES)", f"{co2_now:,.0f} kg", 
+              delta=f"{delta_co2:.1f}%" if co2_prev > 0 else None, delta_color="inverse")
 
-    c1.metric("CO₂ TOTAL (MES)", f"{co2_total:,.0f} kg")
-    c2.metric("INTENSIDAD", f"{intensidad:.1f} g/km")
-    c3.metric("CO₂ EVITABLE (Ralentí)", f"{ahorro_co2_ralenti:,.1f} kg")
-    c4.metric("UNIDADES ANALIZADAS", len(df_view['DOMINIO'].unique()))
+    # Intensidad g/km
+    kms = df_actual['DISTANCIA RECORRIDA TELEMETRIA'].sum()
+    intensidad = (co2_now / kms * 1000) if kms > 0 else 0
+    c2.metric("INTENSIDAD DE CARBONO", f"{intensidad:.1f} g/km", help="Gramos de CO2 por cada km recorrido.")
+
+    # Ahorro Ralentí (2.68 kg CO2 por litro diésel)
+    lts_ral = df_actual['Ralenti (Lts)'].sum()
+    co2_evitable = lts_ral * 2.68
+    c3.metric("CO₂ EVITABLE (RALENTÍ)", f"{co2_evitable:,.1f} kg", delta="Reducible", delta_color="off")
+
+    # Árboles (Cálculo recuperado)
+    arboles_necesarios = co2_now / 20
+    c4.metric("COMPENSACIÓN", f"{int(arboles_necesarios)} Árboles", help="Árboles necesarios por 1 año para absorber este CO2.")
 
     st.divider()
 
     # --- GRÁFICOS ---
-    col1, col2 = st.columns([1.5, 1])
+    col_l, col_r = st.columns([1.5, 1])
 
-    with col1:
-        st.subheader("📊 Huella de Carbono por Patente (Datos Cruzados)")
-        fig_bar = px.bar(df_view.sort_values("Emisiones (KG CO2)", ascending=False), 
+    with col_l:
+        st.subheader("📊 Ranking de Emisiones por Patente")
+        fig_bar = px.bar(df_actual.sort_values("Emisiones (KG CO2)", ascending=False), 
                          x="DOMINIO", y="Emisiones (KG CO2)", color="Emisiones (KG CO2)",
                          color_continuous_scale="Reds", template="plotly_dark")
         fig_bar.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig_bar, use_container_width=True)
 
-    with col2:
-        st.subheader("📉 Eficiencia g/km por Marca")
-        # Calculamos el promedio de g/km por marca
-        df_view['g_km'] = (df_view['Emisiones (KG CO2)'] / df_view['DISTANCIA RECORRIDA TELEMETRIA']) * 1000
-        df_marca = df_view.groupby('MARCA')['g_km'].mean().reset_index()
-        fig_marca = px.bar(df_marca, x='MARCA', y='g_km', color='MARCA', template="plotly_dark")
-        fig_marca.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-        st.plotly_chart(fig_marca, use_container_width=True)
+    with col_r:
+        st.subheader("📉 Distribución CO₂ por Marca")
+        fig_pie = px.pie(df_actual, values='Emisiones (KG CO2)', names='MARCA', 
+                         hole=0.4, color_discrete_sequence=px.colors.sequential.Greens_r)
+        fig_pie.update_layout(paper_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig_pie, use_container_width=True)
 
-    # --- TABLA TÉCNICA ---
-    st.subheader("📋 Detalle de Emisiones Validado")
-    st.dataframe(df_view[['DOMINIO', 'MARCA', 'DISTANCIA RECORRIDA TELEMETRIA', 'LITROS CONSUMIDOS', 'Emisiones (KG CO2)']], use_container_width=True)
+    # --- TABLA DE DETALLE ---
+    st.subheader("📋 Auditoría Ambiental de Flota")
+    df_actual['g_CO2_km'] = (df_actual['Emisiones (KG CO2)'] / df_actual['DISTANCIA RECORRIDA TELEMETRIA']) * 1000
+    st.dataframe(df_actual[['DOMINIO', 'MARCA', 'DISTANCIA RECORRIDA TELEMETRIA', 'Emisiones (KG CO2)', 'g_CO2_km']]
+                 .sort_values('g_CO2_km', ascending=False), use_container_width=True)
 
 # 5. FOOTER
 st.divider()
-st.caption(f"Validación Expreso Diemar | Cruze por Mes/Año/Patente exitoso.")
+st.caption("Fleet Carbon Analysis | Expreso Diemar | Datos cruzados por Mes/Año/Dominio")
