@@ -13,6 +13,7 @@ st.set_page_config(
     layout="wide",
 )
 
+# CSS para fondo oscuro e imagen de fondo
 st.markdown("""
     <style>
     .stApp {
@@ -36,7 +37,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 2. CARGA Y CRUCE FLEXIBLE
+# 2. CARGA Y CRUCE FLEXIBLE (ENFOCADO EN 2026)
 @st.cache_data(ttl=600)
 def get_data():
     u1 = "https://expresodiemar-my.sharepoint.com/:x:/g/personal/nicolascolonna_expresodiemar_onmicrosoft_com/IQCCJG7r9T2JTb0eAdpQU1ggAcTn9ZELfjq58Xk9-eqj58o?download=1"
@@ -59,19 +60,16 @@ def get_data():
         if 'FECHA' in d.columns:
             d['FECHA_DT'] = pd.to_datetime(d['FECHA'], errors='coerce')
 
-    # UNIÓN FLEXIBLE: Primero por Dominio
-    # Usamos "how='inner'" para quedarnos solo con lo que está en ambos archivos
+    # UNIÓN FLEXIBLE: Por Dominio
     df = pd.merge(df_tel, df_con, on="DOMINIO", suffixes=('_tel', '_con'))
     
-    # Filtro de Año 2026 sobre el resultado
+    # Filtro estricto de Año 2026
     if not df.empty and 'FECHA_DT_tel' in df.columns:
         df = df[df['FECHA_DT_tel'].dt.year == 2026].copy()
 
     if not df.empty:
-        # Cálculo de CO2
-        dist = df['DISTANCIA RECORRIDA TELEMETRIA']
-        emi = df['Emisiones (KG CO2)']
-        df['g_co2_km'] = (emi / dist * 1000) if dist.sum() > 0 else 0
+        # Cálculo de CO2 y eficiencia
+        df['g_co2_km'] = (df['Emisiones (KG CO2)'] / df['DISTANCIA RECORRIDA TELEMETRIA']) * 1000
     
     return df
 
@@ -103,29 +101,55 @@ if marca_sel != "Todas":
 # 4. VISTAS
 if df.empty:
     st.warning("⚠️ Sin datos coincidentes para 2026.")
-    st.info("Esto sucede si las patentes del archivo de 19 filas no están presentes en el de 290 filas.")
 else:
     if portal == "📊 Desempeño de Flota":
         st.title("🚛 Fleet Analytics 2026")
+        
         c1, c2, c3 = st.columns(3)
         c1.metric("🛣️ Km Totales", f"{df['DISTANCIA RECORRIDA TELEMETRIA'].sum():,.0f}")
         c2.metric("📊 L/100km Prom.", f"{df['Consumo c/ 100km TELEMETRIA'].mean():.2f}")
         c3.metric("⛽ Litros Totales", f"{df['LITROS CONSUMIDOS'].sum():,.0f}")
 
-        st.plotly_chart(px.scatter(df, x="DISTANCIA RECORRIDA TELEMETRIA", y="LITROS CONSUMIDOS", 
-                                   color="DOMINIO", size="Ralenti (Lts)", hover_name="DOMINIO",
-                                   template="plotly_dark"), use_container_width=True)
+        st.subheader("📍 Eficiencia por Unidad")
+        
+        # --- LIMPIEZA PARA EL GRÁFICO (EVITA EL VALUEERROR) ---
+        df_plot = df.copy()
+        df_plot['Ralenti (Lts)'] = df_plot['Ralenti (Lts)'].fillna(0).clip(lower=0)
+        # Si no hay datos de ralentí, usamos un tamaño base fijo de 10
+        if df_plot['Ralenti (Lts)'].sum() == 0:
+            df_plot['size_burbuja'] = 10
+        else:
+            df_plot['size_burbuja'] = df_plot['Ralenti (Lts)'] + 5 # +5 para que se vean
+
+        fig = px.scatter(df_plot, 
+                         x="DISTANCIA RECORRIDA TELEMETRIA", 
+                         y="LITROS CONSUMIDOS", 
+                         color="DOMINIO", 
+                         size="size_burbuja", 
+                         hover_name="DOMINIO",
+                         hover_data=["Ralenti (Lts)", "Consumo c/ 100km TELEMETRIA"],
+                         template="plotly_dark")
+        
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig, use_container_width=True)
 
     elif portal == "🌿 Portal de Emisiones CO2":
         st.title("🌿 Sustentabilidad 2026")
+        
         total_co2 = df['Emisiones (KG CO2)'].sum()
-        st.metric("Huella de Carbono Total", f"{total_co2:,.0f} kg CO2")
+        c1, c2 = st.columns(2)
+        c1.metric("Huella de Carbono Total", f"{total_co2:,.0f} kg CO2")
+        
+        km_tot = df['DISTANCIA RECORRIDA TELEMETRIA'].sum()
+        ef_co2 = (total_co2 / km_tot * 1000) if km_tot > 0 else 0
+        c2.metric("Promedio gCO2/km", f"{ef_co2:.1f} g")
         
         fig_co2 = px.bar(df.sort_values("Emisiones (KG CO2)", ascending=False),
                          x="DOMINIO", y="Emisiones (KG CO2)", color="Emisiones (KG CO2)",
                          template="plotly_dark", color_continuous_scale="Reds")
+        fig_co2.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig_co2, use_container_width=True)
 
 # 5. FOOTER
 st.divider()
-st.caption(f"Registros procesados: {len(df)}")
+st.caption(f"Exclusivo 2026 | Registros procesados: {len(df)}")
